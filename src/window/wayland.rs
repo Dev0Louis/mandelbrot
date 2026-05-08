@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     error::Error,
     ffi::{CStr, c_char, c_int, c_uint, c_void},
     fmt::Display,
@@ -331,6 +332,8 @@ struct XdgSurface(c_void);
 struct XdgToplevel(c_void);
 #[repr(transparent)]
 struct WlSeat(c_void);
+#[repr(transparent)]
+struct WlPointer(c_void);
 #[repr(C)]
 struct WlInterface {
     name: *const c_char,
@@ -353,6 +356,16 @@ struct WlArray {
     size: usize,
     alloc: usize,
     data: *mut c_void,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct WlFixed(i32);
+impl WlFixed {
+    #[allow(clippy::cast_sign_loss, clippy::cast_precision_loss)]
+    fn to_f64(self) -> f64 {
+        f64::from_bits((((1023 + 44) << 52) + (1 << 51) + i64::from(self.0)) as u64)
+            - (3u64 << 43) as f64
+    }
 }
 #[repr(C)]
 struct WlRegistryListener {
@@ -396,6 +409,68 @@ struct XdgToplevelListener {
         capabilities: *mut WlArray,
     ),
 }
+#[repr(C)]
+struct PointerListener {
+    enter: unsafe extern "C" fn(
+        data: *mut c_void,
+        pointer: NonNull<WlPointer>,
+        serial: u32,
+        surface: NonNull<WlSurface>,
+        surface_x: WlFixed,
+        surface_y: WlFixed,
+    ),
+    leave: unsafe extern "C" fn(
+        data: *mut c_void,
+        pointer: NonNull<WlPointer>,
+        serial: u32,
+        surface: NonNull<WlSurface>,
+    ),
+    motion: unsafe extern "C" fn(
+        data: *mut c_void,
+        pointer: NonNull<WlPointer>,
+        time: u32,
+        surface_x: WlFixed,
+        surface_y: WlFixed,
+    ),
+    button: unsafe extern "C" fn(
+        data: *mut c_void,
+        pointer: NonNull<WlPointer>,
+        serial: u32,
+        time: u32,
+        button: u32,
+        state: u32,
+    ),
+    axis: unsafe extern "C" fn(
+        data: *mut c_void,
+        pointer: NonNull<WlPointer>,
+        time: u32,
+        axis: u32,
+        value: WlFixed,
+    ),
+    frame: unsafe extern "C" fn(data: *mut c_void, pointer: NonNull<WlPointer>),
+    axis_source:
+        unsafe extern "C" fn(data: *mut c_void, pointer: NonNull<WlPointer>, axis_source: u32),
+    axis_stop:
+        unsafe extern "C" fn(data: *mut c_void, pointer: NonNull<WlPointer>, time: u32, axis: u32),
+    axis_discrete: unsafe extern "C" fn(
+        data: *mut c_void,
+        pointer: NonNull<WlPointer>,
+        axis: u32,
+        discrete: i32,
+    ),
+    axis_value120: unsafe extern "C" fn(
+        data: *mut c_void,
+        pointer: NonNull<WlPointer>,
+        axis: u32,
+        value120: i32,
+    ),
+    axis_relative_direction: unsafe extern "C" fn(
+        data: *mut c_void,
+        pointer: NonNull<WlPointer>,
+        axis: u32,
+        direction: u32,
+    ),
+}
 
 #[link(name = "wayland-client")]
 unsafe extern "C" {
@@ -409,6 +484,8 @@ unsafe extern "C" {
     safe static WL_SEAT_INTERFACE: WlInterface;
     #[link_name = "wl_output_interface"]
     safe static WL_OUTPUT_INTERFACE: WlInterface;
+    #[link_name = "wl_pointer_interface"]
+    safe static WL_POINTER_INTERFACE: WlInterface;
 
     fn wl_display_connect(name: *const c_char) -> *mut WlDisplay;
     fn wl_display_dispatch(display: NonNull<WlDisplay>) -> c_int;
@@ -438,6 +515,7 @@ const XDG_WM_BASE_GET_XDG_SURFACE: u32 = 2;
 const XDG_WM_BASE_PONG: u32 = 3;
 const XDG_SURFACE_GET_TOPLEVEL: u32 = 1;
 const XDG_SURFACE_ACK_CONFIGURE: u32 = 4;
+const WL_SEAT_GET_POINTER: u32 = 0;
 
 #[link(name = "GL")]
 unsafe extern "C" {
@@ -449,7 +527,7 @@ unsafe extern "C" {
 struct Interfaces {
     compositor: Option<(NonNull<WlCompositor>, u32)>,
     wm_base: Option<(NonNull<XdgWMBase>, u32)>,
-    wl_seat: Option<(NonNull<WlSeat>, u32)>,
+    seat: Option<(NonNull<WlSeat>, u32)>,
 }
 
 static REGISTRY_LISTENER: WlRegistryListener = WlRegistryListener {
@@ -467,6 +545,19 @@ static XDG_TOPLEVEL_LISTENER: XdgToplevelListener = XdgToplevelListener {
     close: xdg_toplevel_listener_close_listener,
     configure_bounds: xdg_toplevel_listener_configure_bounds_listener,
     wm_capabilities: xdg_toplevel_listener_wm_capabilities_listener,
+};
+static POINTER_LISTENER: PointerListener = PointerListener {
+    enter: pointer_listener_enter_listener,
+    leave: pointer_listener_leave_listener,
+    motion: pointer_listener_motion_listener,
+    button: pointer_listener_button_listener,
+    axis: pointer_listener_axis_listener,
+    frame: pointer_listener_frame_listener,
+    axis_source: pointer_listener_axis_source_listener,
+    axis_stop: pointer_listener_axis_stop_listener,
+    axis_discrete: pointer_listener_axis_discrete_listener,
+    axis_value120: pointer_listener_axis_value120_listener,
+    axis_relative_direction: pointer_listener_axis_relative_direction_listener,
 };
 
 unsafe extern "C" fn registry_listener_global_listener(
@@ -513,7 +604,7 @@ unsafe extern "C" fn registry_listener_global_listener(
             .zip(Some(version));
         },
         Ok("wl_seat") => unsafe {
-            objects.wl_seat = NonNull::new(
+            objects.seat = NonNull::new(
                 wl_proxy_marshal_flags(
                     registry.cast(),
                     WL_REGISTRY_BIND,
@@ -605,6 +696,96 @@ const unsafe extern "C" fn xdg_toplevel_listener_wm_capabilities_listener(
 ) {
 }
 
+const unsafe extern "C" fn pointer_listener_enter_listener(
+    _data: *mut c_void,
+    _pointer: NonNull<WlPointer>,
+    _serial: u32,
+    _surface: NonNull<WlSurface>,
+    _surface_x: WlFixed,
+    _surface_y: WlFixed,
+) {
+}
+const unsafe extern "C" fn pointer_listener_leave_listener(
+    _data: *mut c_void,
+    _pointer: NonNull<WlPointer>,
+    _serial: u32,
+    _surface: NonNull<WlSurface>,
+) {
+}
+unsafe extern "C" fn pointer_listener_motion_listener(
+    data: *mut c_void,
+    _pointer: NonNull<WlPointer>,
+    _time: u32,
+    surface_x: WlFixed,
+    surface_y: WlFixed,
+) {
+    let pointer_coordinates_scroll = unsafe { &*data.cast::<Cell<(f64, f64, f64)>>() };
+    pointer_coordinates_scroll.set((
+        surface_x.to_f64(),
+        surface_y.to_f64(),
+        pointer_coordinates_scroll.get().2,
+    ));
+}
+const unsafe extern "C" fn pointer_listener_button_listener(
+    _data: *mut c_void,
+    _pointer: NonNull<WlPointer>,
+    _serial: u32,
+    _time: u32,
+    _button: u32,
+    _state: u32,
+) {
+}
+unsafe extern "C" fn pointer_listener_axis_listener(
+    data: *mut c_void,
+    _pointer: NonNull<WlPointer>,
+    _time: u32,
+    _axis: u32,
+    value: WlFixed,
+) {
+    let pointer_coordinates_scroll = unsafe { &*data.cast::<Cell<(f64, f64, f64)>>() };
+    let (x, y, scroll) = pointer_coordinates_scroll.get();
+    pointer_coordinates_scroll.set((x, y, (scroll - value.to_f64()).max(0.0)));
+}
+const unsafe extern "C" fn pointer_listener_frame_listener(
+    _data: *mut c_void,
+    _pointer: NonNull<WlPointer>,
+) {
+}
+const unsafe extern "C" fn pointer_listener_axis_source_listener(
+    _data: *mut c_void,
+    _pointer: NonNull<WlPointer>,
+    _axis_source: u32,
+) {
+}
+const unsafe extern "C" fn pointer_listener_axis_stop_listener(
+    _data: *mut c_void,
+    _pointer: NonNull<WlPointer>,
+    _time: u32,
+    _axis: u32,
+) {
+}
+const unsafe extern "C" fn pointer_listener_axis_discrete_listener(
+    _data: *mut c_void,
+    _pointer: NonNull<WlPointer>,
+    _axis: u32,
+    _discrete: i32,
+) {
+}
+const unsafe extern "C" fn pointer_listener_axis_value120_listener(
+    _data: *mut c_void,
+    _pointer: NonNull<WlPointer>,
+    _axis: u32,
+    _value120: i32,
+) {
+}
+const unsafe extern "C" fn pointer_listener_axis_relative_direction_listener(
+    _data: *mut c_void,
+    _pointer: NonNull<WlPointer>,
+    _axis: u32,
+    _direction: u32,
+) {
+}
+
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
 struct EglDisplay(*mut c_void);
@@ -692,6 +873,7 @@ pub(super) struct Window {
     wl_display: NonNull<WlDisplay>,
     egl_display: EglDisplay,
     egl_surface: EglSurface,
+    pointer_coordinates_scroll: Box<Cell<(f64, f64, f64)>>,
 }
 
 impl Window {
@@ -847,23 +1029,31 @@ impl Window {
                 wl_egl_window.as_ptr().cast(),
             );
 
-            let surface = NonNull::new(
+            let pointer_coordinates = Box::new(Cell::new((0.0, 0.0, 0.0)));
+            let (seat, seat_version) = interfaces.seat.ok_or(WindowCreateError::NoSeat)?;
+            let pointer = NonNull::new(
                 wl_proxy_marshal_flags(
-                    compositor.cast(),
-                    WL_COMPOSITOR_CREATE_SURFACE,
-                    &raw const WL_SURFACE_INTERFACE,
-                    compositor_version,
+                    seat.cast(),
+                    WL_SEAT_GET_POINTER,
+                    &raw const WL_POINTER_INTERFACE,
+                    seat_version,
                     0,
                     std::ptr::null::<c_void>(),
                 )
-                .cast::<WlSurface>(),
+                .cast::<WlPointer>(),
             )
-            .ok_or(WindowCreateError::NullSurface)?;
+            .ok_or(WindowCreateError::NullPointer)?;
+            wl_proxy_add_listener(
+                pointer.cast(),
+                (&raw const POINTER_LISTENER).cast(),
+                (&raw const *pointer_coordinates).cast_mut().cast(),
+            );
 
             Ok(Self {
                 wl_display,
                 egl_display,
                 egl_surface,
+                pointer_coordinates_scroll: pointer_coordinates,
             })
         }
     }
@@ -891,6 +1081,15 @@ impl Window {
             }
         }
     }
+
+    pub fn pointer_coordinates(&self) -> (f64, f64) {
+        let (x, y, _) = self.pointer_coordinates_scroll.get();
+        (x, y)
+    }
+
+    pub fn total_scroll(&self) -> f64 {
+        self.pointer_coordinates_scroll.get().2
+    }
 }
 
 #[derive(Debug)]
@@ -911,6 +1110,9 @@ pub enum WindowCreateError {
     EglNoOpenGL,
     NullEglContext,
     EglContextNotCurrent,
+
+    NoSeat,
+    NullPointer,
 }
 impl Display for WindowCreateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -930,6 +1132,8 @@ impl Display for WindowCreateError {
             Self::EglNoOpenGL => "could not bind OpenGL to EGL",
             Self::NullEglContext => "returned EGL context was null",
             Self::EglContextNotCurrent => "could not make EGL context current",
+            Self::NoSeat => "could not bind seat from registry",
+            Self::NullPointer => "returned pointer interface was null",
         })
     }
 }

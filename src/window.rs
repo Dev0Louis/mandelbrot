@@ -29,6 +29,14 @@ impl Window {
     pub fn check_events(&self) -> Result<(), EventCheckError> {
         self.0.check_events().map_err(EventCheckError)
     }
+
+    pub fn pointer_coordinates(&self) -> (f64, f64) {
+        self.0.pointer_coordinates()
+    }
+
+    pub fn total_scroll(&self) -> f64 {
+        self.0.total_scroll()
+    }
 }
 
 #[derive(Debug)]

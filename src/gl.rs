@@ -80,8 +80,6 @@ gl! {
     c"glUniform2i" => safe uniform_2i(location: i32, v0: i32, v1: i32)
 
     c"glBindVertexArray" => safe bind_vertex_array(array: u32)
-    c"glClearColor" => safe clear_color(r: f32, g: f32, b: f32, a: f32)
-    c"glClear" => safe clear(buf: u32)
     c"glDrawElements" => unsafe draw_elements_unchecked(mode: u32, count: u32, r#type: u32, indices: *const c_void)
 }
 
@@ -93,7 +91,6 @@ impl GL {
     pub const FLOAT: u32 = 0x1406;
     pub const VERTEX_SHADER: u32 = 0x8B31;
     pub const FRAGMENT_SHADER: u32 = 0x8B30;
-    pub const COLOR_BUFFER_BIT: u32 = 0x4000;
     pub const TRIANGLES: u32 = 0x4;
     pub const UNSIGNED_BYTE: u32 = 0x1401;
 

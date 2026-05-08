@@ -1,6 +1,8 @@
 #![warn(clippy::all, clippy::nursery, clippy::pedantic)]
 #![allow(clippy::cast_possible_truncation)]
 
+use std::time::Instant;
+
 use crate::{
     gl::{GL, Triangle},
     window::Window,
@@ -63,16 +65,32 @@ fn main() {
     let center_uniform = gl.get_uniform_location(program, c"center");
 
     gl.bind_vertex_array(vao);
-    let mut i = 1.0;
+
+    let mut old_pointer_x: f64 = window.pointer_coordinates().0;
+    let mut old_pointer_y: f64 = window.pointer_coordinates().1;
+    let mut center_real: f32 = 0.0;
+    let mut center_imaginary: f32 = 0.0;
+    let start = Instant::now();
     loop {
         let (width, height) = gl.get_viewport();
+        let (pointer_x, pointer_y) = window.pointer_coordinates();
+        let pointer_dx = pointer_x - old_pointer_x;
+        let pointer_dy = pointer_y - old_pointer_y;
+        let zoom = 10.0f32.powf(window.total_scroll() as f32 / 100.0);
+        center_real -= pointer_dx as f32 / width as f32 / zoom * 2.0;
+        center_imaginary += pointer_dy as f32 / height as f32 / zoom * 2.0;
         gl.uniform_2i(viewport_uniform, width, height);
-        gl.uniform_1f(zoom_uniform, i);
-        gl.uniform_2f(center_uniform, -0.75, 0.1);
-        //i *= 1.01;
+        gl.uniform_1f(zoom_uniform, zoom);
+        gl.uniform_2f(center_uniform, center_real, center_imaginary);
+        if start.elapsed().as_secs() > 1 {
+            //zoom *= 1.005;
+        }
 
         gl.draw_elements(&ELEMENTS);
         window.swap_buffers().unwrap();
         window.check_events().unwrap();
+
+        old_pointer_x = pointer_x;
+        old_pointer_y = pointer_y;
     }
 }
