@@ -74,8 +74,12 @@ fn main() {
     loop {
         let (width, height) = gl.get_viewport();
         let (pointer_x, pointer_y) = window.pointer_coordinates();
-        let pointer_dx = pointer_x - old_pointer_x;
-        let pointer_dy = pointer_y - old_pointer_y;
+        let mut pointer_dx = pointer_x - old_pointer_x;
+        let mut pointer_dy = pointer_y - old_pointer_y;
+        if old_pointer_x == 0.0 && old_pointer_y == 0.0 {
+            pointer_dx = 0.0;
+            pointer_dy = 0.0;
+        }
         let zoom = 10.0f32.powf(window.total_scroll() as f32 / 100.0);
         center_real -= pointer_dx as f32 / width as f32 / zoom * 2.0;
         center_imaginary += pointer_dy as f32 / height as f32 / zoom * 2.0;
