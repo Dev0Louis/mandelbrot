@@ -74,15 +74,15 @@ fn main() {
     loop {
         let (width, height) = gl.get_viewport();
         let (pointer_x, pointer_y) = window.pointer_coordinates();
-        let mut pointer_dx = pointer_x - old_pointer_x;
-        let mut pointer_dy = pointer_y - old_pointer_y;
-        if old_pointer_x == 0.0 && old_pointer_y == 0.0 {
-            pointer_dx = 0.0;
-            pointer_dy = 0.0;
-        }
+        let (movement_x, movement_y) =
+            if !window.left_pressed() || old_pointer_x == 0.0 && old_pointer_y == 0.0 {
+                (0.0, 0.0)
+            } else {
+                (pointer_x - old_pointer_x, pointer_y - old_pointer_y)
+            };
         let zoom = 10.0f32.powf(window.total_scroll() as f32 / 100.0);
-        center_real -= pointer_dx as f32 / width as f32 / zoom * 2.0;
-        center_imaginary += pointer_dy as f32 / height as f32 / zoom * 2.0;
+        center_real -= movement_x as f32 / width as f32 / zoom * 2.0;
+        center_imaginary += movement_y as f32 / height as f32 / zoom * 2.0;
         gl.uniform_2i(viewport_uniform, width, height);
         gl.uniform_1f(zoom_uniform, zoom);
         gl.uniform_2f(center_uniform, center_real, center_imaginary);

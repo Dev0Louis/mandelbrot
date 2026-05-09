@@ -696,6 +696,13 @@ const unsafe extern "C" fn xdg_toplevel_listener_wm_capabilities_listener(
 ) {
 }
 
+#[derive(Default, Debug, Clone, Copy)]
+struct PointerState {
+    x: f64,
+    y: f64,
+    total_scroll: f64,
+    left_pressed: bool,
+}
 const unsafe extern "C" fn pointer_listener_enter_listener(
     _data: *mut c_void,
     _pointer: NonNull<WlPointer>,
@@ -719,32 +726,46 @@ unsafe extern "C" fn pointer_listener_motion_listener(
     surface_x: WlFixed,
     surface_y: WlFixed,
 ) {
-    let pointer_coordinates_scroll = unsafe { &*data.cast::<Cell<(f64, f64, f64)>>() };
-    pointer_coordinates_scroll.set((
-        surface_x.to_f64(),
-        surface_y.to_f64(),
-        pointer_coordinates_scroll.get().2,
-    ));
+    let pointer_state = unsafe { &*data.cast::<Cell<PointerState>>() };
+    pointer_state.set(PointerState {
+        x: surface_x.to_f64(),
+        y: surface_y.to_f64(),
+        ..pointer_state.get()
+    });
 }
-const unsafe extern "C" fn pointer_listener_button_listener(
-    _data: *mut c_void,
+unsafe extern "C" fn pointer_listener_button_listener(
+    data: *mut c_void,
     _pointer: NonNull<WlPointer>,
     _serial: u32,
     _time: u32,
-    _button: u32,
-    _state: u32,
+    button: u32,
+    state: u32,
 ) {
+    if button != 0x110 {
+        return;
+    }
+    let pointer_state = unsafe { &*data.cast::<Cell<PointerState>>() };
+    pointer_state.set(PointerState {
+        left_pressed: state == 1,
+        ..pointer_state.get()
+    });
 }
 unsafe extern "C" fn pointer_listener_axis_listener(
     data: *mut c_void,
     _pointer: NonNull<WlPointer>,
     _time: u32,
-    _axis: u32,
+    axis: u32,
     value: WlFixed,
 ) {
-    let pointer_coordinates_scroll = unsafe { &*data.cast::<Cell<(f64, f64, f64)>>() };
-    let (x, y, scroll) = pointer_coordinates_scroll.get();
-    pointer_coordinates_scroll.set((x, y, (scroll - value.to_f64()).max(0.0)));
+    if axis != 0 {
+        return;
+    }
+    let pointer_state = unsafe { &*data.cast::<Cell<PointerState>>() };
+    let previous = pointer_state.get();
+    pointer_state.set(PointerState {
+        total_scroll: (previous.total_scroll - value.to_f64()).max(0.0),
+        ..previous
+    });
 }
 const unsafe extern "C" fn pointer_listener_frame_listener(
     _data: *mut c_void,
@@ -873,7 +894,7 @@ pub(super) struct Window {
     wl_display: NonNull<WlDisplay>,
     egl_display: EglDisplay,
     egl_surface: EglSurface,
-    pointer_coordinates_scroll: Box<Cell<(f64, f64, f64)>>,
+    pointer_state: Box<Cell<PointerState>>,
 }
 
 impl Window {
@@ -1029,7 +1050,7 @@ impl Window {
                 wl_egl_window.as_ptr().cast(),
             );
 
-            let pointer_coordinates = Box::new(Cell::new((0.0, 0.0, 0.0)));
+            let pointer_state: Box<Cell<PointerState>> = Box::default();
             let (seat, seat_version) = interfaces.seat.ok_or(WindowCreateError::NoSeat)?;
             let pointer = NonNull::new(
                 wl_proxy_marshal_flags(
@@ -1046,14 +1067,14 @@ impl Window {
             wl_proxy_add_listener(
                 pointer.cast(),
                 (&raw const POINTER_LISTENER).cast(),
-                (&raw const *pointer_coordinates).cast_mut().cast(),
+                (&raw const *pointer_state).cast_mut().cast(),
             );
 
             Ok(Self {
                 wl_display,
                 egl_display,
                 egl_surface,
-                pointer_coordinates_scroll: pointer_coordinates,
+                pointer_state,
             })
         }
     }
@@ -1083,12 +1104,16 @@ impl Window {
     }
 
     pub fn pointer_coordinates(&self) -> (f64, f64) {
-        let (x, y, _) = self.pointer_coordinates_scroll.get();
-        (x, y)
+        let pointer_state = self.pointer_state.get();
+        (pointer_state.x, pointer_state.y)
     }
 
     pub fn total_scroll(&self) -> f64 {
-        self.pointer_coordinates_scroll.get().2
+        self.pointer_state.get().total_scroll
+    }
+
+    pub fn left_pressed(&self) -> bool {
+        self.pointer_state.get().left_pressed
     }
 }
 

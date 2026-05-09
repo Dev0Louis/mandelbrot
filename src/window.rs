@@ -37,6 +37,10 @@ impl Window {
     pub fn total_scroll(&self) -> f64 {
         self.0.total_scroll()
     }
+
+    pub fn left_pressed(&self) -> bool {
+        self.0.left_pressed()
+    }
 }
 
 #[derive(Debug)]
