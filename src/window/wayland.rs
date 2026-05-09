@@ -821,7 +821,7 @@ unsafe extern "C" fn pointer_listener_axis_listener(
     let pointer_state = unsafe { &*data.cast::<Cell<PointerState>>() };
     let previous = pointer_state.get();
     pointer_state.set(PointerState {
-        total_scroll: (previous.total_scroll - value.to_f64()).max(0.0),
+        total_scroll: previous.total_scroll - value.to_f64(),
         ..previous
     });
 }

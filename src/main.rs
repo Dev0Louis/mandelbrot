@@ -11,7 +11,6 @@ use crate::{
 };
 
 mod gl;
-mod math;
 mod window;
 
 #[repr(C)]
