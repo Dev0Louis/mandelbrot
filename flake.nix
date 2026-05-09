@@ -13,8 +13,15 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+      rust-overlay,
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs {
@@ -26,29 +33,30 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          	  
+
           buildInputs = with pkgs; [
-	    rust-toolchain
+            rust-toolchain
             rust-analyzer
             rustfmt
             clippy
             lld
-	    wayland
-	    wayland-protocols
-	    egl-wayland
-	    libGL
+            wayland
+            wayland-protocols
+            egl-wayland
+            libGL
           ];
-  
 
-          LD_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [
-	    wayland
-	    wayland-protocols
-	    egl-wayland
-	    libGL
-	  ];
+          LD_LIBRARY_PATH =
+            with pkgs;
+            lib.makeLibraryPath [
+              wayland
+              wayland-protocols
+              egl-wayland
+              libGL
+            ];
 
           RUST_SRC_PATH = "${rust-toolchain}/lib/rustlib/src/rust/library";
         };
       }
     );
-} 
+}
