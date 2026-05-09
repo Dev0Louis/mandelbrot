@@ -38,8 +38,16 @@ impl Window {
         self.0.total_scroll()
     }
 
-    pub fn left_pressed(&self) -> bool {
-        self.0.left_pressed()
+    pub fn left_button(&self) -> bool {
+        self.0.left_button()
+    }
+
+    pub fn up_key(&self) -> bool {
+        self.0.up_key()
+    }
+
+    pub fn down_key(&self) -> bool {
+        self.0.down_key()
     }
 }
 
