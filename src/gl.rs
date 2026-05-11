@@ -77,6 +77,7 @@ gl! {
     c"glGetUniformLocation" => unsafe get_uniform_location_unchecked(program: u32, name: *const c_char) -> i32
     c"glUniform1f" => safe uniform_1f(location: i32, v0: f32)
     c"glUniform2f" => safe uniform_2f(location: i32, v0: f32, v1: f32)
+    c"glUniform1i" => safe uniform_1i(location: i32, v0: i32)
     c"glUniform2i" => safe uniform_2i(location: i32, v0: i32, v1: i32)
 
     c"glBindVertexArray" => safe bind_vertex_array(array: u32)

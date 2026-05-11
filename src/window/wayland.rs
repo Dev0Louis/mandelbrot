@@ -334,6 +334,8 @@ struct XdgToplevel(c_void);
 struct WlSeat(c_void);
 #[repr(transparent)]
 struct WlPointer(c_void);
+#[repr(transparent)]
+struct WlKeyboard(c_void);
 #[repr(C)]
 struct WlInterface {
     name: *const c_char,
@@ -361,7 +363,6 @@ struct WlArray {
 #[derive(Clone, Copy)]
 struct WlFixed(i32);
 impl WlFixed {
-    #[allow(clippy::cast_sign_loss, clippy::cast_precision_loss)]
     fn to_f64(self) -> f64 {
         f64::from_bits((((1023 + 44) << 52) + (1 << 51) + i64::from(self.0)) as u64)
             - (3u64 << 43) as f64
@@ -471,6 +472,52 @@ struct PointerListener {
         direction: u32,
     ),
 }
+#[repr(C)]
+struct KeyboardListener {
+    keymap: unsafe extern "C" fn(
+        data: *mut c_void,
+        keyboard: NonNull<WlKeyboard>,
+        format: u32,
+        fd: i32,
+        size: u32,
+    ),
+    enter: unsafe extern "C" fn(
+        data: *mut c_void,
+        keyboard: NonNull<WlKeyboard>,
+        serial: u32,
+        surface: NonNull<WlSurface>,
+        keys: *mut WlArray,
+    ),
+    leave: unsafe extern "C" fn(
+        data: *mut c_void,
+        keyboard: NonNull<WlKeyboard>,
+        serial: u32,
+        surface: NonNull<WlSurface>,
+    ),
+    key: unsafe extern "C" fn(
+        data: *mut c_void,
+        keyboard: NonNull<WlKeyboard>,
+        serial: u32,
+        time: u32,
+        key: u32,
+        state: u32,
+    ),
+    modifiers: unsafe extern "C" fn(
+        data: *mut c_void,
+        keyboard: NonNull<WlKeyboard>,
+        serial: u32,
+        mods_depressed: u32,
+        mods_latched: u32,
+        mods_locked: u32,
+        group: u32,
+    ),
+    repeat_info: unsafe extern "C" fn(
+        data: *mut c_void,
+        keyboard: NonNull<WlKeyboard>,
+        rate: i32,
+        delay: i32,
+    ),
+}
 
 #[link(name = "wayland-client")]
 unsafe extern "C" {
@@ -486,6 +533,8 @@ unsafe extern "C" {
     safe static WL_OUTPUT_INTERFACE: WlInterface;
     #[link_name = "wl_pointer_interface"]
     safe static WL_POINTER_INTERFACE: WlInterface;
+    #[link_name = "wl_keyboard_interface"]
+    safe static WL_KEYBOARD_INTERFACE: WlInterface;
 
     fn wl_display_connect(name: *const c_char) -> *mut WlDisplay;
     fn wl_display_dispatch(display: NonNull<WlDisplay>) -> c_int;
@@ -516,6 +565,7 @@ const XDG_WM_BASE_PONG: u32 = 3;
 const XDG_SURFACE_GET_TOPLEVEL: u32 = 1;
 const XDG_SURFACE_ACK_CONFIGURE: u32 = 4;
 const WL_SEAT_GET_POINTER: u32 = 0;
+const WL_SEAT_GET_KEYBOARD: u32 = 1;
 
 #[link(name = "GL")]
 unsafe extern "C" {
@@ -558,6 +608,14 @@ static POINTER_LISTENER: PointerListener = PointerListener {
     axis_discrete: pointer_listener_axis_discrete_listener,
     axis_value120: pointer_listener_axis_value120_listener,
     axis_relative_direction: pointer_listener_axis_relative_direction_listener,
+};
+static KEYBOARD_LISTENER: KeyboardListener = KeyboardListener {
+    keymap: keyboard_listener_keymap_listener,
+    enter: keyboard_listener_enter_listener,
+    leave: keyboard_listener_leave_listener,
+    key: keyboard_listener_key_listener,
+    modifiers: keyboard_listener_modifiers_listener,
+    repeat_info: keyboard_listener_repeat_info_listener,
 };
 
 unsafe extern "C" fn registry_listener_global_listener(
@@ -696,6 +754,13 @@ const unsafe extern "C" fn xdg_toplevel_listener_wm_capabilities_listener(
 ) {
 }
 
+#[derive(Default, Debug, Clone, Copy)]
+struct PointerState {
+    x: f64,
+    y: f64,
+    total_scroll: f64,
+    left: bool,
+}
 const unsafe extern "C" fn pointer_listener_enter_listener(
     _data: *mut c_void,
     _pointer: NonNull<WlPointer>,
@@ -719,32 +784,46 @@ unsafe extern "C" fn pointer_listener_motion_listener(
     surface_x: WlFixed,
     surface_y: WlFixed,
 ) {
-    let pointer_coordinates_scroll = unsafe { &*data.cast::<Cell<(f64, f64, f64)>>() };
-    pointer_coordinates_scroll.set((
-        surface_x.to_f64(),
-        surface_y.to_f64(),
-        pointer_coordinates_scroll.get().2,
-    ));
+    let pointer_state = unsafe { &*data.cast::<Cell<PointerState>>() };
+    pointer_state.set(PointerState {
+        x: surface_x.to_f64(),
+        y: surface_y.to_f64(),
+        ..pointer_state.get()
+    });
 }
-const unsafe extern "C" fn pointer_listener_button_listener(
-    _data: *mut c_void,
+unsafe extern "C" fn pointer_listener_button_listener(
+    data: *mut c_void,
     _pointer: NonNull<WlPointer>,
     _serial: u32,
     _time: u32,
-    _button: u32,
-    _state: u32,
+    button: u32,
+    state: u32,
 ) {
+    if button != 0x110 {
+        return;
+    }
+    let pointer_state = unsafe { &*data.cast::<Cell<PointerState>>() };
+    pointer_state.set(PointerState {
+        left: state == 1,
+        ..pointer_state.get()
+    });
 }
 unsafe extern "C" fn pointer_listener_axis_listener(
     data: *mut c_void,
     _pointer: NonNull<WlPointer>,
     _time: u32,
-    _axis: u32,
+    axis: u32,
     value: WlFixed,
 ) {
-    let pointer_coordinates_scroll = unsafe { &*data.cast::<Cell<(f64, f64, f64)>>() };
-    let (x, y, scroll) = pointer_coordinates_scroll.get();
-    pointer_coordinates_scroll.set((x, y, (scroll - value.to_f64()).max(0.0)));
+    if axis != 0 {
+        return;
+    }
+    let pointer_state = unsafe { &*data.cast::<Cell<PointerState>>() };
+    let previous = pointer_state.get();
+    pointer_state.set(PointerState {
+        total_scroll: previous.total_scroll - value.to_f64(),
+        ..previous
+    });
 }
 const unsafe extern "C" fn pointer_listener_frame_listener(
     _data: *mut c_void,
@@ -783,6 +862,73 @@ const unsafe extern "C" fn pointer_listener_axis_relative_direction_listener(
     _pointer: NonNull<WlPointer>,
     _axis: u32,
     _direction: u32,
+) {
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+struct KeyboardState {
+    up: bool,
+    down: bool,
+}
+const unsafe extern "C" fn keyboard_listener_keymap_listener(
+    _data: *mut c_void,
+    _keyboard: NonNull<WlKeyboard>,
+    _format: u32,
+    _fd: i32,
+    _size: u32,
+) {
+}
+const unsafe extern "C" fn keyboard_listener_enter_listener(
+    _data: *mut c_void,
+    _keyboard: NonNull<WlKeyboard>,
+    _serial: u32,
+    _surface: NonNull<WlSurface>,
+    _keys: *mut WlArray,
+) {
+}
+const unsafe extern "C" fn keyboard_listener_leave_listener(
+    _data: *mut c_void,
+    _keyboard: NonNull<WlKeyboard>,
+    _serial: u32,
+    _surface: NonNull<WlSurface>,
+) {
+}
+unsafe extern "C" fn keyboard_listener_key_listener(
+    data: *mut c_void,
+    _keyboard: NonNull<WlKeyboard>,
+    _serial: u32,
+    _time: u32,
+    key: u32,
+    state: u32,
+) {
+    let keyboard_state = unsafe { &*data.cast::<Cell<KeyboardState>>() };
+    keyboard_state.set(match key {
+        103 => KeyboardState {
+            up: state > 0,
+            ..keyboard_state.get()
+        },
+        108 => KeyboardState {
+            down: state > 0,
+            ..keyboard_state.get()
+        },
+        _ => keyboard_state.get(),
+    });
+}
+const unsafe extern "C" fn keyboard_listener_modifiers_listener(
+    _data: *mut c_void,
+    _keyboard: NonNull<WlKeyboard>,
+    _serial: u32,
+    _mods_depressed: u32,
+    _mods_latched: u32,
+    _mods_locked: u32,
+    _group: u32,
+) {
+}
+const unsafe extern "C" fn keyboard_listener_repeat_info_listener(
+    _data: *mut c_void,
+    _keyboard: NonNull<WlKeyboard>,
+    _rate: i32,
+    _delay: i32,
 ) {
 }
 
@@ -873,7 +1019,8 @@ pub(super) struct Window {
     wl_display: NonNull<WlDisplay>,
     egl_display: EglDisplay,
     egl_surface: EglSurface,
-    pointer_coordinates_scroll: Box<Cell<(f64, f64, f64)>>,
+    pointer_state: Box<Cell<PointerState>>,
+    keyboard_state: Box<Cell<KeyboardState>>,
 }
 
 impl Window {
@@ -1029,8 +1176,9 @@ impl Window {
                 wl_egl_window.as_ptr().cast(),
             );
 
-            let pointer_coordinates = Box::new(Cell::new((0.0, 0.0, 0.0)));
             let (seat, seat_version) = interfaces.seat.ok_or(WindowCreateError::NoSeat)?;
+
+            let pointer_state: Box<Cell<PointerState>> = Box::default();
             let pointer = NonNull::new(
                 wl_proxy_marshal_flags(
                     seat.cast(),
@@ -1046,14 +1194,34 @@ impl Window {
             wl_proxy_add_listener(
                 pointer.cast(),
                 (&raw const POINTER_LISTENER).cast(),
-                (&raw const *pointer_coordinates).cast_mut().cast(),
+                (&raw const *pointer_state).cast_mut().cast(),
+            );
+
+            let keyboard_state: Box<Cell<KeyboardState>> = Box::default();
+            let keyboard = NonNull::new(
+                wl_proxy_marshal_flags(
+                    seat.cast(),
+                    WL_SEAT_GET_KEYBOARD,
+                    &raw const WL_KEYBOARD_INTERFACE,
+                    seat_version,
+                    0,
+                    std::ptr::null::<c_void>(),
+                )
+                .cast::<WlKeyboard>(),
+            )
+            .ok_or(WindowCreateError::NullKeyboard)?;
+            wl_proxy_add_listener(
+                keyboard.cast(),
+                (&raw const KEYBOARD_LISTENER).cast(),
+                (&raw const *keyboard_state).cast_mut().cast(),
             );
 
             Ok(Self {
                 wl_display,
                 egl_display,
                 egl_surface,
-                pointer_coordinates_scroll: pointer_coordinates,
+                pointer_state,
+                keyboard_state,
             })
         }
     }
@@ -1083,12 +1251,24 @@ impl Window {
     }
 
     pub fn pointer_coordinates(&self) -> (f64, f64) {
-        let (x, y, _) = self.pointer_coordinates_scroll.get();
-        (x, y)
+        let pointer_state = self.pointer_state.get();
+        (pointer_state.x, pointer_state.y)
     }
 
     pub fn total_scroll(&self) -> f64 {
-        self.pointer_coordinates_scroll.get().2
+        self.pointer_state.get().total_scroll
+    }
+
+    pub fn left_button(&self) -> bool {
+        self.pointer_state.get().left
+    }
+
+    pub fn up_key(&self) -> bool {
+        self.keyboard_state.get().up
+    }
+
+    pub fn down_key(&self) -> bool {
+        self.keyboard_state.get().down
     }
 }
 
@@ -1113,6 +1293,7 @@ pub enum WindowCreateError {
 
     NoSeat,
     NullPointer,
+    NullKeyboard,
 }
 impl Display for WindowCreateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1134,6 +1315,7 @@ impl Display for WindowCreateError {
             Self::EglContextNotCurrent => "could not make EGL context current",
             Self::NoSeat => "could not bind seat from registry",
             Self::NullPointer => "returned pointer interface was null",
+            Self::NullKeyboard => "returned keyboard interface was null",
         })
     }
 }
